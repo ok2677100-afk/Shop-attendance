@@ -1,0 +1,21 @@
+{
+  "name": "shop-attendance",
+  "version": "1.0.0",
+  "description": "Shop Attendance Punch Clock with WiFi and Fingerprint verification",
+  "main": "index.js",
+  "scripts": {
+    "build": "echo 'Static HTML — no build step needed'",
+    "cap:add:android": "npx cap add android",
+    "cap:sync": "npx cap sync android",
+    "cap:open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor-community/wifi-info": "^1.0.0",
+    "capacitor-biometric-auth": "^5.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0"
+  }
+}

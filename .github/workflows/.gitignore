@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Android generated files (Capacitor regenerates these)
+android/
+
+# Build outputs
+dist/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
