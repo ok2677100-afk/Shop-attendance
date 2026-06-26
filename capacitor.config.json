@@ -1,0 +1,18 @@
+{
+  "appId": "com.shopattendance.app",
+  "appName": "Shop Attendance",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#11151C",
+      "showSpinner": false
+    }
+  }
+}

@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Shop Attendance — Punch In/Out</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+<!-- Capacitor core (loaded from Android WebView assets) -->
+<script src="capacitor.js"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --ink:#11151C;
+    --panel:#1C2230;
+    --panel-2:#222A3A;
+    --amber:#E8A33D;
+    --green:#3DDC8A;
+    --red:#E8543D;
+    --paper:#F4F1EA;
+  }
+  *{ -webkit-tap-highlight-color: transparent; box-sizing:border-box; }
+  body{
+    background-color: var(--ink);
+    background-image:
+      radial-gradient(circle at 15% 0%, rgba(232,163,61,0.08), transparent 45%),
+      radial-gradient(circle at 100% 100%, rgba(61,220,138,0.05), transparent 40%);
+    font-family:'Inter', sans-serif;
+    color: var(--paper);
+    /* Safe area for Android notch */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .font-display{ font-family:'Space Grotesk', sans-serif; }
+  .font-mono{ font-family:'JetBrains Mono', monospace; }
+
+  .panel{
+    background: var(--panel);
+    border: 1px solid rgba(244,241,234,0.08);
+  }
+
+  .led-dot{
+    width:8px; height:8px; border-radius:50%;
+    box-shadow: 0 0 6px 1px currentColor;
+    display:inline-block;
+  }
+  @keyframes pulse-soft{ 0%,100%{opacity:1} 50%{opacity:.45} }
+  .pulse{ animation: pulse-soft 1.6s ease-in-out infinite; }
+
+  .punch-btn{
+    transition: transform .08s ease, box-shadow .08s ease, filter .15s ease;
+    box-shadow: 0 4px 0 0 rgba(0,0,0,0.25);
+  }
+  .punch-btn:active{ transform: translateY(3px); box-shadow: 0 1px 0 0 rgba(0,0,0,0.25); }
+  .punch-btn:disabled{ opacity:.4; cursor:not-allowed; }
+
+  .shake{ animation: shake .42s linear; }
+  @keyframes shake{
+    10%,90%{ transform: translateX(-1px); }
+    20%,80%{ transform: translateX(2px); }
+    30%,50%,70%{ transform: translateX(-4px); }
+    40%,60%{ transform: translateX(4px); }
+  }
+
+  /* Fingerprint scan */
+  .fp-ring{
+    width:96px; height:96px; border-radius:50%;
+    border:2px solid rgba(232,163,61,0.25);
+  }
+  .fp-scanline{
+    position:absolute; left:6px; right:6px; height:3px;
+    background: linear-gradient(90deg, transparent, var(--amber), transparent);
+    border-radius:3px; box-shadow:0 0 10px var(--amber);
+    animation: scan 1.5s ease-in-out infinite;
+  }
+  @keyframes scan{
+    0%{ top:14px; opacity:0; }
+    10%{ opacity:1; }
+    50%{ top:78px; opacity:1; }
+    90%{ opacity:1; }
+    100%{ top:78px; opacity:0; }
+  }
+
+  /* Receipt */
+  .ticket{
+    background: #0E1018;
+    color: var(--paper);
+    position: relative;
+    border-radius: 2px;
+  }
+  .ticket::before, .ticket::after{
+    content:"";
+    position:absolute;
+    width:18px; height:18px;
+    background: var(--ink);
+    border-radius:50%;
+    left:-9px;
+  }
+  .ticket::before{ top:-9px; }
+  .ticket::after{ bottom:-9px; }
+  .perf{ border-top: 2px dashed rgba(244,241,234,0.18); }
+  .ledger-row{
+    display:flex; justify-content:space-between; gap:1rem;
+    padding: 7px 0;
+    border-bottom: 1px solid rgba(244,241,234,0.06);
+    font-size: 0.82rem;
+  }
+  .ledger-row:last-child{ border-bottom:none; }
+
+  .modal-backdrop{
+    background: rgba(7,9,13,0.78);
+    backdrop-filter: blur(3px);
+  }
+
+  input::placeholder{ color: rgba(244,241,234,0.35); }
+
+  .scrollbar-thin::-webkit-scrollbar{ width:6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb{ background: rgba(244,241,234,0.15); border-radius:3px; }
+
+  /* WiFi badge */
+  .wifi-badge{
+    display:inline-flex; align-items:center; gap:6px;
+    background: rgba(61,220,138,0.1);
+    border: 1px solid rgba(61,220,138,0.25);
+    border-radius:20px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--green);
+  }
+  .wifi-badge.unknown{
+    background: rgba(232,163,61,0.1);
+    border-color: rgba(232,163,61,0.25);
+    color: var(--amber);
+  }
+</style>
+</head>
+
+<body class="min-h-screen flex items-center justify-center p-4">
+
+<div class="w-full max-w-md mx-auto">
+
+  <!-- ===== Admin Config ===== -->
+  <div class="mb-3">
+    <button id="adminToggle" class="w-full flex items-center justify-between text-xs font-mono text-[#F4F1EA]/40 hover:text-[#F4F1EA]/70 px-2 py-1 transition">
+      <span>⚙ Admin: Shop Network Config</span>
+      <span id="adminChevron">▾</span>
+    </button>
+    <div id="adminPanel" class="hidden mt-2 panel rounded-lg p-4">
+      <label class="block text-[11px] font-mono uppercase tracking-wide text-[#F4F1EA]/50 mb-1.5">Allowed Shop Wi-Fi Name (SSID)</label>
+      <div class="flex gap-2 mb-3">
+        <input id="allowedSsidInput" type="text" placeholder="e.g. ShopNetwork_5G"
+          class="flex-1 bg-[#11151C] border border-white/10 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-[#E8A33D]/60">
+        <button id="saveSsidBtn" class="px-3 py-2 rounded-md bg-[#E8A33D] text-[#11151C] text-xs font-semibold font-display">SAVE</button>
+      </div>
+      <label class="block text-[11px] font-mono uppercase tracking-wide text-[#F4F1EA]/50 mb-1.5">Allowed Shop Wi-Fi Public IP (optional fallback)</label>
+      <div class="flex gap-2">
+        <input id="allowedIpInput" type="text" placeholder="e.g. 103.21.244.10"
+          class="flex-1 bg-[#11151C] border border-white/10 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-[#E8A33D]/60">
+        <button id="saveIpBtn" class="px-3 py-2 rounded-md bg-[#E8A33D] text-[#11151C] text-xs font-semibold font-display">SAVE</button>
+      </div>
+      <p class="text-[11px] text-[#F4F1EA]/40 mt-2 leading-relaxed">Set the allowed WiFi SSID name. The app will check the device is on this exact network before allowing punch-in/out.</p>
+      <p id="savedNote" class="text-[11px] font-mono text-[#3DDC8A] mt-1 hidden"></p>
+    </div>
+  </div>
+
+  <!-- ===== Main Card ===== -->
+  <div class="panel rounded-2xl shadow-2xl overflow-hidden">
+
+    <!-- Status strip -->
+    <div class="bg-[#161B26] px-5 py-3 flex items-center justify-between border-b border-white/5">
+      <div class="flex items-center gap-2 flex-wrap gap-y-1">
+        <span id="ipLed" class="led-dot pulse bg-[#E8A33D]" style="color:#E8A33D"></span>
+        <span id="ipText" class="font-mono text-xs text-[#F4F1EA]/70">Detecting IP…</span>
+      </div>
+      <span id="clockText" class="font-mono text-xs text-[#F4F1EA]/50">--:--:--</span>
+    </div>
+
+    <!-- WiFi strip -->
+    <div class="bg-[#161B26] px-5 py-2 border-b border-white/5 flex items-center gap-2">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3 h-3 text-[#F4F1EA]/40 shrink-0">
+        <path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>
+      </svg>
+      <span id="wifiName" class="wifi-badge unknown">Detecting WiFi…</span>
+    </div>
+
+    <div class="p-6">
+      <div class="mb-5">
+        <h1 class="font-display text-2xl font-700 leading-tight">Shop Punch Clock</h1>
+        <p class="text-sm text-[#F4F1EA]/50 mt-1">Verify your shift on the shop network.</p>
+      </div>
+
+      <label class="block text-xs font-mono uppercase tracking-wide text-[#F4F1EA]/50 mb-1.5">Employee Name</label>
+      <input id="nameInput" type="text" placeholder="Type your full name"
+        class="w-full bg-[#11151C] border border-white/10 rounded-lg px-4 py-3 text-base outline-none focus:border-[#E8A33D]/60 transition mb-1.5">
+      <p id="nameError" class="text-xs text-[#E8543D] mb-3 hidden">Please enter your name before continuing.</p>
+      <div class="mb-3"></div>
+
+      <div class="grid grid-cols-2 gap-3 mt-4">
+        <button id="checkInBtn"
+          class="punch-btn font-display font-700 text-[#11151C] bg-[#3DDC8A] rounded-xl py-4 text-sm tracking-wide">
+          CHECK IN
+        </button>
+        <button id="checkOutBtn"
+          class="punch-btn font-display font-700 text-[#11151C] bg-[#E8543D] rounded-xl py-4 text-sm tracking-wide">
+          CHECK OUT
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Receipt Area ===== -->
+  <div id="receiptWrap" class="mt-6 hidden">
+    <div id="receiptCard" class="ticket px-6 py-6 mx-2">
+      <div class="text-center mb-3">
+        <p class="font-display text-[11px] tracking-[0.25em] text-[#E8A33D] uppercase">Shop Attendance Receipt</p>
+        <p id="receiptStatusLine" class="font-display text-xl font-700 mt-1">— STATUS —</p>
+      </div>
+      <div class="perf my-3"></div>
+      <div class="font-mono">
+        <div class="ledger-row"><span class="text-[#F4F1EA]/45">EMPLOYEE</span><span id="rcName" class="text-right">—</span></div>
+        <div class="ledger-row"><span class="text-[#F4F1EA]/45">STATUS</span><span id="rcStatus" class="text-right">—</span></div>
+        <div class="ledger-row"><span class="text-[#F4F1EA]/45">WIFI SSID</span><span id="rcWifi" class="text-right">—</span></div>
+        <div class="ledger-row"><span class="text-[#F4F1EA]/45">VERIFIED IP</span><span id="rcIp" class="text-right">—</span></div>
+        <div class="ledger-row"><span class="text-[#F4F1EA]/45">FINGERPRINT</span><span id="rcFp" class="text-right text-[#3DDC8A]">—</span></div>
+        <div class="ledger-row"><span class="text-[#F4F1EA]/45">DATE</span><span id="rcDate" class="text-right">—</span></div>
+        <div class="ledger-row"><span class="text-[#F4F1EA]/45">TIME</span><span id="rcTime" class="text-right">—</span></div>
+      </div>
+      <div class="perf my-3"></div>
+      <div class="flex flex-col items-center gap-2 pt-1">
+        <div id="qrcode" class="bg-white p-2 rounded"></div>
+        <p class="text-[10px] font-mono text-[#F4F1EA]/35 tracking-wide">SCAN TO VERIFY AUTHENTICITY</p>
+      </div>
+    </div>
+    <button id="downloadBtn" class="punch-btn w-full mt-4 font-display font-700 text-sm bg-[#E8A33D] text-[#11151C] rounded-xl py-3">
+      ⬇ Download / Share Receipt Image
+    </button>
+  </div>
+
+</div>
+
+<!-- ===== Fingerprint Modal ===== -->
+<div id="fpModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 p-4">
+  <div class="panel rounded-2xl p-8 max-w-xs w-full text-center">
+    <div class="relative w-24 h-24 mx-auto mb-5 flex items-center justify-center">
+      <div class="fp-ring absolute inset-0"></div>
+      <div class="fp-scanline"></div>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#E8A33D" stroke-width="1.5" class="w-10 h-10 relative z-10">
+        <path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/>
+        <path d="M14 13.12c0 2.38 0 6.38-1 8.88"/>
+        <path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/>
+        <path d="M2 12a10 10 0 0 1 18-6"/>
+        <path d="M2 17c1 .5 2.1.86 3.18 1"/>
+        <path d="M20.56 9c.46 1.5.61 3.06.44 4.6"/>
+        <path d="M6.67 3.5A10 10 0 0 1 22 12"/>
+        <path d="M9 12a3 3 0 0 1 5.12-2.12"/>
+      </svg>
+    </div>
+    <p id="fpStatus" class="font-display text-base font-600 mb-1">Scanning Fingerprint…</p>
+    <p class="text-sm text-[#F4F1EA]/50">Place your finger on the sensor</p>
+  </div>
+</div>
+
+<!-- ===== Error Modal ===== -->
+<div id="errorModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 p-4">
+  <div class="panel rounded-2xl p-8 max-w-xs w-full text-center">
+    <div class="text-4xl mb-4">🚫</div>
+    <p class="font-display text-lg font-700 text-[#E8543D] mb-2">Network Mismatch</p>
+    <p class="text-sm text-[#F4F1EA]/60 mb-4">You must be on the shop Wi-Fi to punch in/out.</p>
+    <pre id="errorIpDetail" class="text-[11px] font-mono text-[#F4F1EA]/50 bg-[#11151C] rounded-lg p-3 mb-5 text-left leading-relaxed whitespace-pre-wrap"></pre>
+    <button id="errorCloseBtn" class="punch-btn w-full font-display font-700 text-sm bg-[#E8A33D] text-[#11151C] rounded-xl py-3">
+      Got it
+    </button>
+  </div>
+</div>
+
+<script>
+(async function(){
+
+  const ALLOWED_IP_KEY   = 'shopAllowedIp';
+  const ALLOWED_SSID_KEY = 'shopAllowedSsid';
+
+  let currentIp   = null;
+  let currentSsid = null;
+  let fingerprintVerified = false;
+
+  // -------- Capacitor plugin bridges --------
+  // These are available once the APK is running on Android.
+  // On plain browser they gracefully degrade.
+
+  async function getNativeWifiInfo() {
+    try {
+      // Uses @capacitor-community/wifi-info plugin
+      const { WifiInfo } = await import('./plugins/WifiInfo.js').catch(() => null) || {};
+      if (WifiInfo) {
+        const info = await WifiInfo.getWifiInfo();
+        return { ssid: info.ssid || null, ip: info.ip || null };
+      }
+      // Fallback: try Capacitor global
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.WifiInfo) {
+        const info = await window.Capacitor.Plugins.WifiInfo.getWifiInfo();
+        return { ssid: info.ssid || null, ip: info.ip || null };
+      }
+    } catch(e) { /* not on native */ }
+    return { ssid: null, ip: null };
+  }
+
+  async function nativeBiometricAuth() {
+    try {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BiometricAuth) {
+        const result = await window.Capacitor.Plugins.BiometricAuth.authenticate({
+          reason: 'Verify your identity to punch in/out',
+          title: 'Fingerprint Required',
+          subtitle: 'Shop Attendance',
+          description: 'Touch the fingerprint sensor',
+          negativeButtonText: 'Cancel',
+          allowDeviceCredential: false,
+        });
+        return result.verified === true;
+      }
+    } catch(e) {
+      console.warn('Biometric error:', e);
+      if (e && e.code === 'USER_FALLBACK') return false;
+    }
+    // On plain browser: simulate (always passes) so you can test
+    return true;
+  }
+
+  // -------- UI refs --------
+  const adminToggle   = document.getElementById('adminToggle');
+  const adminChevron  = document.getElementById('adminChevron');
+  const adminPanel    = document.getElementById('adminPanel');
+  const allowedSsidInput = document.getElementById('allowedSsidInput');
+  const allowedIpInput   = document.getElementById('allowedIpInput');
+  const saveSsidBtn   = document.getElementById('saveSsidBtn');
+  const saveIpBtn     = document.getElementById('saveIpBtn');
+  const savedNote     = document.getElementById('savedNote');
+
+  const ipLed     = document.getElementById('ipLed');
+  const ipText    = document.getElementById('ipText');
+  const wifiName  = document.getElementById('wifiName');
+  const clockText = document.getElementById('clockText');
+
+  const nameInput   = document.getElementById('nameInput');
+  const nameError   = document.getElementById('nameError');
+  const checkInBtn  = document.getElementById('checkInBtn');
+  const checkOutBtn = document.getElementById('checkOutBtn');
+
+  const fpModal    = document.getElementById('fpModal');
+  const fpStatus   = document.getElementById('fpStatus');
+  const errorModal = document.getElementById('errorModal');
+  const errorIpDetail = document.getElementById('errorIpDetail');
+  const errorCloseBtn = document.getElementById('errorCloseBtn');
+
+  const receiptWrap       = document.getElementById('receiptWrap');
+  const receiptCard       = document.getElementById('receiptCard');
+  const receiptStatusLine = document.getElementById('receiptStatusLine');
+  const rcName   = document.getElementById('rcName');
+  const rcStatus = document.getElementById('rcStatus');
+  const rcWifi   = document.getElementById('rcWifi');
+  const rcIp     = document.getElementById('rcIp');
+  const rcFp     = document.getElementById('rcFp');
+  const rcDate   = document.getElementById('rcDate');
+  const rcTime   = document.getElementById('rcTime');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  // -------- Admin panel --------
+  adminToggle.addEventListener('click', () => {
+    adminPanel.classList.toggle('hidden');
+    adminChevron.textContent = adminPanel.classList.contains('hidden') ? '▾' : '▴';
+  });
+
+  const savedSsid = localStorage.getItem(ALLOWED_SSID_KEY);
+  const savedIp   = localStorage.getItem(ALLOWED_IP_KEY);
+  if (savedSsid) allowedSsidInput.value = savedSsid;
+  if (savedIp)   allowedIpInput.value   = savedIp;
+
+  function showSavedNote(msg) {
+    savedNote.textContent = msg;
+    savedNote.classList.remove('hidden');
+    setTimeout(() => savedNote.classList.add('hidden'), 2500);
+  }
+
+  saveSsidBtn.addEventListener('click', () => {
+    const val = allowedSsidInput.value.trim();
+    if (!val) return;
+    localStorage.setItem(ALLOWED_SSID_KEY, val);
+    showSavedNote(`WiFi SSID saved: "${val}"`);
+  });
+
+  saveIpBtn.addEventListener('click', () => {
+    const val = allowedIpInput.value.trim();
+    if (!val) return;
+    localStorage.setItem(ALLOWED_IP_KEY, val);
+    showSavedNote(`IP saved: ${val}`);
+  });
+
+  // -------- Clock --------
+  function pad(n){ return n.toString().padStart(2,'0'); }
+  function formatDate(d){ return `${pad(d.getDate())}-${pad(d.getMonth()+1)}-${d.getFullYear()}`; }
+  function formatTime(d){
+    let h = d.getHours();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${pad(h)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${ampm}`;
+  }
+  setInterval(() => { clockText.textContent = formatTime(new Date()); }, 1000);
+  clockText.textContent = formatTime(new Date());
+
+  // -------- Fetch public IP --------
+  async function fetchPublicIp() {
+    try {
+      const res  = await fetch('https://api.ipify.org?format=json');
+      const data = await res.json();
+      currentIp = data.ip;
+      ipText.textContent = currentIp;
+      ipLed.style.color = '#3DDC8A';
+      ipLed.style.background = '#3DDC8A';
+      ipLed.className = 'led-dot pulse bg-[#3DDC8A]';
+    } catch {
+      ipText.textContent = 'IP lookup failed';
+      ipLed.style.color = '#E8543D';
+    }
+  }
+
+  // -------- Fetch WiFi SSID (native) --------
+  async function fetchWifiInfo() {
+    const info = await getNativeWifiInfo();
+    if (info.ssid) {
+      currentSsid = info.ssid.replace(/^"(.*)"$/, '$1'); // strip quotes Android adds
+      wifiName.textContent = '📶 ' + currentSsid;
+      wifiName.classList.remove('unknown');
+    } else {
+      currentSsid = null;
+      wifiName.textContent = 'WiFi name not available';
+      wifiName.classList.add('unknown');
+    }
+    // Also grab local IP from native if available
+    if (info.ip && !currentIp) {
+      currentIp = info.ip;
+      ipText.textContent = currentIp + ' (local)';
+    }
+  }
+
+  await Promise.all([fetchPublicIp(), fetchWifiInfo()]);
+
+  // -------- Name validation --------
+  function validName() {
+    const val = nameInput.value.trim();
+    if (!val) {
+      nameError.classList.remove('hidden');
+      nameInput.classList.add('shake');
+      nameInput.focus();
+      setTimeout(() => nameInput.classList.remove('shake'), 450);
+      return null;
+    }
+    nameError.classList.add('hidden');
+    return val;
+  }
+
+  // -------- Modals --------
+  function showModal(el){ el.classList.remove('hidden'); el.classList.add('flex'); }
+  function hideModal(el){ el.classList.add('hidden');    el.classList.remove('flex'); }
+
+  errorCloseBtn.addEventListener('click', () => hideModal(errorModal));
+
+  function rejectAttendance(reason) {
+    const allowedSsid = localStorage.getItem(ALLOWED_SSID_KEY) || '(not configured)';
+    const allowedIp   = localStorage.getItem(ALLOWED_IP_KEY)   || '(not configured)';
+    errorIpDetail.textContent =
+      `REASON    : ${reason}\n\n` +
+      `YOUR WIFI : ${currentSsid || 'unknown'}\n` +
+      `SHOP WIFI : ${allowedSsid}\n\n` +
+      `YOUR IP   : ${currentIp   || 'unknown'}\n` +
+      `SHOP IP   : ${allowedIp}`;
+    showModal(errorModal);
+  }
+
+  // -------- Fingerprint --------
+  async function runFingerprintScan() {
+    fpStatus.textContent = 'Scanning Fingerprint…';
+    showModal(fpModal);
+    const verified = await nativeBiometricAuth();
+    if (!verified) {
+      hideModal(fpModal);
+      return false;
+    }
+    fpStatus.textContent = '✔ Verified';
+    await new Promise(r => setTimeout(r, 600));
+    hideModal(fpModal);
+    return true;
+  }
+
+  // -------- Network check --------
+  function networkAllowed() {
+    const allowedSsid = (localStorage.getItem(ALLOWED_SSID_KEY) || '').trim();
+    const allowedIp   = (localStorage.getItem(ALLOWED_IP_KEY)   || '').trim();
+
+    // If SSID is configured, check it first (most reliable on native)
+    if (allowedSsid) {
+      if (currentSsid && currentSsid === allowedSsid) return { ok: true };
+      // SSID configured but doesn't match → reject
+      if (currentSsid && currentSsid !== allowedSsid) return { ok: false, reason: 'Wrong WiFi network' };
+      // SSID not readable (browser mode) → fall through to IP check
+    }
+
+    // IP fallback
+    if (allowedIp) {
+      if (currentIp && currentIp === allowedIp) return { ok: true };
+      return { ok: false, reason: 'IP address does not match shop network' };
+    }
+
+    return { ok: false, reason: 'No network restriction configured. Please set shop WiFi or IP in Admin panel.' };
+  }
+
+  // -------- Receipt --------
+  function buildReceipt(name, status, fpVerified) {
+    const now = new Date();
+    rcName.textContent   = name;
+    rcStatus.textContent = status;
+    rcWifi.textContent   = currentSsid || 'N/A';
+    rcIp.textContent     = currentIp   || 'unknown';
+    rcFp.textContent     = fpVerified ? '✔ VERIFIED' : '✘ NOT USED';
+    rcDate.textContent   = formatDate(now);
+    rcTime.textContent   = formatTime(now);
+
+    receiptStatusLine.textContent = status === 'CHECKED IN' ? '✔ CHECKED IN' : '✔ CHECKED OUT';
+    receiptStatusLine.style.color = status === 'CHECKED IN' ? '#3DDC8A' : '#E8543D';
+
+    const payload =
+      `SHOP-ATTENDANCE-RECEIPT|` +
+      `NAME:${name}|STATUS:${status}|` +
+      `WIFI:${currentSsid || 'N/A'}|` +
+      `IP:${currentIp || 'unknown'}|` +
+      `FP:${fpVerified ? 'VERIFIED' : 'NO'}|` +
+      `DATE:${formatDate(now)}|TIME:${formatTime(now)}|` +
+      `TS:${now.getTime()}`;
+
+    const qrEl = document.getElementById('qrcode');
+    qrEl.innerHTML = '';
+    new QRCode(qrEl, {
+      text: payload, width: 140, height: 140,
+      colorDark: '#0E1018', colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.H
+    });
+
+    receiptWrap.classList.remove('hidden');
+    receiptWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // -------- Main punch flow --------
+  async function handlePunch(status) {
+    const name = validName();
+    if (!name) return;
+
+    // Re-fetch WiFi in case it changed
+    await fetchWifiInfo();
+    if (!currentIp) await fetchPublicIp();
+
+    const check = networkAllowed();
+    if (!check.ok) {
+      rejectAttendance(check.reason);
+      return;
+    }
+
+    checkInBtn.disabled = true;
+    checkOutBtn.disabled = true;
+
+    const fpOk = await runFingerprintScan();
+
+    buildReceipt(name, status, fpOk);
+
+    checkInBtn.disabled = false;
+    checkOutBtn.disabled = false;
+  }
+
+  checkInBtn.addEventListener('click',  () => handlePunch('CHECKED IN'));
+  checkOutBtn.addEventListener('click', () => handlePunch('CHECKED OUT'));
+
+  // -------- Download receipt --------
+  downloadBtn.addEventListener('click', async () => {
+    downloadBtn.disabled = true;
+    downloadBtn.textContent = 'Generating image…';
+    try {
+      const canvas = await html2canvas(receiptCard, { backgroundColor: '#0E1018', scale: 2 });
+      const link = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      link.download = `attendance-receipt-${ts}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } catch {
+      alert('Could not generate image. Please try again.');
+    } finally {
+      downloadBtn.disabled = false;
+      downloadBtn.textContent = '⬇ Download / Share Receipt Image';
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
